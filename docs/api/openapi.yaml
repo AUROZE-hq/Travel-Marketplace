@@ -1,0 +1,2484 @@
+openapi: 3.0.3
+info:
+  title: Sri Lanka Travel Marketplace API
+  version: 0.2.0-draft
+  description: |
+    Vehicle-with-driver booking marketplace for Sri Lanka (working name PickDrop).
+
+    **Status: specification only (Stage 2A).** Routes are implemented from Stage 3 onwards.
+
+    ## Conventions
+
+    * Base path: `/api/v1`. JSON only. Timestamps are ISO-8601 in UTC (`2026-12-01T04:30:00Z`);
+      clients display them in `Asia/Colombo`.
+    * Money is a decimal **string** with 2 decimals (`"16500.00"`) plus `currency` (always `LKR` for now).
+    * **Success envelope:** `{ "data": ..., "meta": { ... } }` (`meta` optional).
+    * **Error envelope:** `{ "error": { "code": "VEHICLE_UNAVAILABLE", "message": "...", "details": [...] } }`.
+    * **Pagination:** query `page` (1-based, default 1) and `pageSize` (default 20, max 100) →
+      `meta.total`, `meta.page`, `meta.pageSize`.
+    * **Auth:** `Authorization: Bearer <access token>`. Each operation lists required roles in
+      `x-required-roles` and in its description. A user may hold several roles.
+    * **Contact privacy (rule 14):** fields marked `x-contact-privacy` are omitted (absent, not null) unless the
+      stated condition holds:
+      - Owner sees customer `email`/`phone` only once the booking is `CONFIRMED` or `COMPLETED`.
+      - Customer sees driver details only once a driver is assigned.
+
+    ## Error codes
+
+    `VALIDATION_ERROR` 422 · `UNAUTHENTICATED` 401 · `FORBIDDEN` 403 · `NOT_FOUND` 404 · `CONFLICT` 409 ·
+    `INVALID_STATE` 409 · `VEHICLE_UNAVAILABLE` 409 · `VEHICLE_NOT_BOOKABLE` 409 · `QUOTATION_NOT_ACCEPTABLE` 409 ·
+    `QUOTATION_EXPIRED` 410 · `HOLD_EXPIRED` 409 · `DRIVER_UNAVAILABLE` 409 · `DRIVER_NOT_ELIGIBLE` 422 ·
+    `RATE_LIMITED` 429 · `INTERNAL_ERROR` 500
+  license:
+    name: Proprietary
+    url: https://example.com/license
+servers:
+  - url: /api/v1
+    description: Same origin (local development runs at http://localhost:5000/api/v1)
+security:
+  - bearerAuth: []
+tags:
+  - name: auth
+    description: Registration, sessions and password reset
+  - name: users
+    description: The current user
+  - name: owners
+    description: Owner onboarding, drivers and operating areas
+  - name: vehicles
+    description: Owner vehicle management, images, driver links and blocks
+  - name: search
+    description: Public vehicle search
+  - name: reference
+    description: Public reference data (categories, areas)
+  - name: documents
+    description: Verification documents
+  - name: trip-requests
+    description: Customer trip requests and owner inbox
+  - name: quotations
+    description: Owner quotations; customer accept/reject
+  - name: bookings
+    description: Bookings and driver assignment
+  - name: trips
+    description: Driver trip status updates
+  - name: admin
+    description: "Administration — verification, reference data, settings, users"
+
+paths:
+  # ---------------------------------------------------------------------------
+  # Auth
+  # ---------------------------------------------------------------------------
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      summary: Register a customer account
+      description: Creates a user with the CUSTOMER role. Owner/driver onboarding happens afterwards. Public.
+      security: []
+      x-required-roles: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, fullName]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 10 }
+                fullName: { type: string, minLength: 1, maxLength: 120 }
+                phone: { type: string, example: '+94771234567' }
+      responses:
+        '201':
+          description: Registered and signed in
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/AuthSession' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Log in with email and password
+      description: Public.
+      security: []
+      x-required-roles: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/AuthSession' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      operationId: refreshToken
+      summary: Exchange a refresh token for a new session
+      description: Public (the refresh token is the credential). Refresh tokens rotate on use.
+      security: []
+      x-required-roles: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200':
+          description: New session
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/AuthSession' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Revoke the current refresh token
+      description: 'Roles: any authenticated user.'
+      x-required-roles: [ANY]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '204': { description: Logged out }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/password-reset/request:
+    post:
+      tags: [auth]
+      operationId: requestPasswordReset
+      summary: Request a password reset email
+      description: Public. Always returns 202 whether or not the email exists (no account enumeration).
+      security: []
+      x-required-roles: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '202': { description: Accepted }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /auth/password-reset/confirm:
+    post:
+      tags: [auth]
+      operationId: confirmPasswordReset
+      summary: Set a new password using a reset token
+      description: Public.
+      security: []
+      x-required-roles: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, newPassword]
+              properties:
+                token: { type: string }
+                newPassword: { type: string, format: password, minLength: 10 }
+      responses:
+        '204': { description: Password changed; all sessions revoked }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ---------------------------------------------------------------------------
+  # Users
+  # ---------------------------------------------------------------------------
+  /users/me:
+    get:
+      tags: [users]
+      operationId: getMe
+      summary: Current user with roles and profiles
+      description: 'Roles: any authenticated user.'
+      x-required-roles: [ANY]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    patch:
+      tags: [users]
+      operationId: updateMe
+      summary: Update own name / phone
+      description: 'Roles: any authenticated user. Email changes are a separate verified flow (later).'
+      x-required-roles: [ANY]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                fullName: { type: string, minLength: 1, maxLength: 120 }
+                phone: { type: string }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ---------------------------------------------------------------------------
+  # Owners
+  # ---------------------------------------------------------------------------
+  /owners:
+    post:
+      tags: [owners]
+      operationId: becomeOwner
+      summary: Create the caller's owner profile (adds the OWNER role)
+      description: |
+        Roles: any authenticated user. With `alsoDriver: true` an owner-driver profile is created as well
+        (the owner can then be linked as driver to several of their own vehicles).
+      x-required-roles: [ANY]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ownerType]
+              properties:
+                ownerType: { $ref: '#/components/schemas/OwnerType' }
+                businessName: { type: string, description: Required when ownerType is BUSINESS }
+                businessRegNumber: { type: string }
+                alsoDriver: { type: boolean, default: false }
+                licenceNumber: { type: string, description: Required when alsoDriver is true }
+      responses:
+        '201':
+          description: Owner profile created (verification PENDING)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/OwnerProfile' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /owners/me:
+    get:
+      tags: [owners]
+      operationId: getMyOwnerProfile
+      summary: The caller's owner profile
+      description: 'Roles: OWNER.'
+      x-required-roles: [OWNER]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/OwnerProfile' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    patch:
+      tags: [owners]
+      operationId: updateMyOwnerProfile
+      summary: Update business details
+      description: 'Roles: OWNER. Changing business details may reset verification to PENDING.'
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                businessName: { type: string }
+                businessRegNumber: { type: string }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/OwnerProfile' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /owners/me/drivers:
+    get:
+      tags: [owners]
+      operationId: listMyDrivers
+      summary: Drivers employed by the caller
+      description: 'Roles: OWNER.'
+      x-required-roles: [OWNER]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Driver' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [owners]
+      operationId: createDriver
+      summary: Add a driver (verification PENDING until documents are approved)
+      description: |
+        Roles: OWNER. If `email` matches an existing user they are invited to link their login; otherwise the
+        driver has no login. A person can have only one driver profile.
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fullName, licenceNumber]
+              properties:
+                fullName: { type: string }
+                phone: { type: string }
+                email: { type: string, format: email }
+                licenceNumber: { type: string }
+                licenceExpiresAt: { type: string, format: date-time }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Driver' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /owners/me/drivers/{driverId}:
+    parameters:
+      - $ref: '#/components/parameters/DriverId'
+    patch:
+      tags: [owners]
+      operationId: updateDriver
+      summary: Update or deactivate a driver
+      description: 'Roles: OWNER (must employ the driver).'
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                fullName: { type: string }
+                phone: { type: string }
+                licenceExpiresAt: { type: string, format: date-time }
+                isActive: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Driver' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /owners/me/operating-areas:
+    get:
+      tags: [owners]
+      operationId: listMyOperatingAreas
+      summary: Areas the caller operates in
+      description: 'Roles: OWNER.'
+      x-required-roles: [OWNER]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Area' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [owners]
+      operationId: replaceMyOperatingAreas
+      summary: Replace the set of operating areas
+      description: 'Roles: OWNER. Only active areas are accepted.'
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [areaIds]
+              properties:
+                areaIds:
+                  type: array
+                  maxItems: 50
+                  uniqueItems: true
+                  items: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Area' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ---------------------------------------------------------------------------
+  # Reference data (public)
+  # ---------------------------------------------------------------------------
+  /vehicle-categories:
+    get:
+      tags: [reference]
+      operationId: listVehicleCategories
+      summary: Active vehicle categories
+      description: Public.
+      security: []
+      x-required-roles: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/VehicleCategory' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /areas:
+    get:
+      tags: [reference]
+      operationId: listAreas
+      summary: Active areas
+      description: Public.
+      security: []
+      x-required-roles: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Area' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ---------------------------------------------------------------------------
+  # Vehicles
+  # ---------------------------------------------------------------------------
+  /vehicles/search:
+    get:
+      tags: [search]
+      operationId: searchVehicles
+      summary: Search publicly bookable vehicles
+      description: |
+        Public. Returns only vehicles that are APPROVED, active and linked to at least one APPROVED driver
+        (rule 8). When `startsAt`/`endsAt` are given, vehicles with an ACTIVE block/hold/booking overlapping
+        `[startsAt, endsAt + buffer)` are excluded. Availability shown here is indicative; it is only guaranteed
+        when a hold succeeds.
+      security: []
+      x-required-roles: []
+      parameters:
+        - name: categoryId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: minSeats
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: areaId
+          in: query
+          description: Owner operates in this area
+          schema: { type: string, format: uuid }
+        - name: startsAt
+          in: query
+          schema: { type: string, format: date-time }
+        - name: endsAt
+          in: query
+          schema: { type: string, format: date-time }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [relevance, seats, priceAsc, priceDesc], default: relevance }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/VehiclePublic' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /vehicles:
+    get:
+      tags: [vehicles]
+      operationId: listMyVehicles
+      summary: The caller's vehicles (all statuses)
+      description: 'Roles: OWNER.'
+      x-required-roles: [OWNER]
+      parameters:
+        - name: approvalStatus
+          in: query
+          schema: { $ref: '#/components/schemas/VehicleApprovalStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Vehicle' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [vehicles]
+      operationId: createVehicle
+      summary: Register a vehicle (approvalStatus PENDING)
+      description: 'Roles: OWNER.'
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VehicleInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Vehicle' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /vehicles/{vehicleId}:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    get:
+      tags: [vehicles]
+      operationId: getVehicle
+      summary: Vehicle detail
+      description: |
+        Public for bookable vehicles (returns `VehiclePublic`). The owning OWNER and ADMIN receive the full
+        `Vehicle` for any status.
+      security:
+        - {}
+        - bearerAuth: []
+      x-required-roles: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    oneOf:
+                      - $ref: '#/components/schemas/Vehicle'
+                      - $ref: '#/components/schemas/VehiclePublic'
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [vehicles]
+      operationId: updateVehicle
+      summary: Update a vehicle
+      description: |
+        Roles: OWNER (owner of the vehicle). Changing registration, category, make/model/year or seats sends an
+        APPROVED vehicle back to PENDING review.
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/VehicleInput'
+              properties:
+                isActive: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Vehicle' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [vehicles]
+      operationId: deactivateVehicle
+      summary: Deactivate a vehicle (soft delete)
+      description: 'Roles: OWNER. Refused while the vehicle has future CONFIRMED bookings.'
+      x-required-roles: [OWNER]
+      responses:
+        '204': { description: Deactivated }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /vehicles/{vehicleId}/images:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    get:
+      tags: [vehicles]
+      operationId: listVehicleImages
+      summary: Vehicle images
+      description: Public for bookable vehicles; OWNER/ADMIN otherwise. URLs are short-lived signed URLs.
+      security:
+        - {}
+        - bearerAuth: []
+      x-required-roles: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/VehicleImage' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [vehicles]
+      operationId: addVehicleImage
+      summary: Attach an uploaded image
+      description: |
+        Roles: OWNER. The file is uploaded separately (mechanism decided in a later stage) and referenced here
+        by its private `storageKey`.
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [storageKey]
+              properties:
+                storageKey: { type: string }
+                sortOrder: { type: integer, minimum: 0 }
+                isPrimary: { type: boolean }
+      responses:
+        '201':
+          description: Added
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/VehicleImage' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /vehicles/{vehicleId}/images/{imageId}:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+      - name: imageId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [vehicles]
+      operationId: deleteVehicleImage
+      summary: Remove an image
+      description: 'Roles: OWNER.'
+      x-required-roles: [OWNER]
+      responses:
+        '204': { description: Removed }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /vehicles/{vehicleId}/drivers:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    get:
+      tags: [vehicles]
+      operationId: listVehicleDrivers
+      summary: Drivers linked to a vehicle
+      description: 'Roles: OWNER, ADMIN.'
+      x-required-roles: [OWNER, ADMIN]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Driver' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [vehicles]
+      operationId: linkVehicleDriver
+      summary: Link one of the owner's drivers to the vehicle
+      description: |
+        Roles: OWNER. A normal driver can be linked to only one vehicle (409 `CONFLICT` otherwise); the
+        owner-driver may be linked to several of the owner's vehicles.
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [driverId]
+              properties:
+                driverId: { type: string, format: uuid }
+      responses:
+        '201': { description: Linked }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /vehicles/{vehicleId}/drivers/{driverId}:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+      - $ref: '#/components/parameters/DriverId'
+    delete:
+      tags: [vehicles]
+      operationId: unlinkVehicleDriver
+      summary: Unlink a driver from the vehicle
+      description: |
+        Roles: OWNER. Refused if it would leave an APPROVED vehicle without any approved driver (rule 3), or if
+        the driver has an ACTIVE assignment on this vehicle.
+      x-required-roles: [OWNER]
+      responses:
+        '204': { description: Unlinked }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /vehicles/{vehicleId}/blocks:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    get:
+      tags: [vehicles]
+      operationId: listVehicleBlocks
+      summary: Active owner blocks (and, for the owner, holds and bookings) in a range
+      description: 'Roles: OWNER.'
+      x-required-roles: [OWNER]
+      parameters:
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Occupancy' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [vehicles]
+      operationId: createVehicleBlock
+      summary: Block a time range (maintenance, personal use)
+      description: 'Roles: OWNER. 409 `VEHICLE_UNAVAILABLE` if it overlaps an active block, hold or booking.'
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startsAt, endsAt]
+              properties:
+                startsAt: { type: string, format: date-time }
+                endsAt: { type: string, format: date-time }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '201':
+          description: Blocked
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Occupancy' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /vehicles/{vehicleId}/blocks/{blockId}:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+      - name: blockId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [vehicles]
+      operationId: releaseVehicleBlock
+      summary: Release an owner block
+      description: 'Roles: OWNER. Idempotent.'
+      x-required-roles: [OWNER]
+      responses:
+        '204': { description: Released }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------------------
+  # Documents
+  # ---------------------------------------------------------------------------
+  /documents:
+    post:
+      tags: [documents]
+      operationId: submitDocument
+      summary: Submit a verification document (metadata + private storage key)
+      description: |
+        Roles: OWNER (for own profile, own drivers, own vehicles) or DRIVER (own profile). Documents are never
+        publicly accessible; admins view them via short-lived signed URLs.
+      x-required-roles: [OWNER, DRIVER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subjectType, subjectId, documentType, storageKey]
+              properties:
+                subjectType: { $ref: '#/components/schemas/DocumentSubject' }
+                subjectId: { type: string, format: uuid }
+                documentType: { type: string, example: VEHICLE_REVENUE_LICENCE }
+                storageKey: { type: string }
+                validUntil: { type: string, format: date-time }
+      responses:
+        '201':
+          description: Submitted (PENDING)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Document' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ---------------------------------------------------------------------------
+  # Trip requests
+  # ---------------------------------------------------------------------------
+  /trip-requests:
+    post:
+      tags: [trip-requests]
+      operationId: createTripRequest
+      summary: Request a trip on a specific vehicle
+      description: |
+        Roles: CUSTOMER. The vehicle must be bookable. No messaging happens before quoting; put everything
+        relevant in `specialRequirements` / `luggageNotes`.
+      x-required-roles: [CUSTOMER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TripRequestInput' }
+      responses:
+        '201':
+          description: Submitted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/TripRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    get:
+      tags: [trip-requests]
+      operationId: listMyTripRequests
+      summary: The caller's trip requests
+      description: 'Roles: CUSTOMER.'
+      x-required-roles: [CUSTOMER]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/TripRequestStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/TripRequest' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /trip-requests/inbox:
+    get:
+      tags: [trip-requests]
+      operationId: ownerTripRequestInbox
+      summary: Requests for the caller's vehicles
+      description: |
+        Roles: OWNER. The customer appears as `customer.fullName` only — no email or phone (rule 14).
+      x-required-roles: [OWNER]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/TripRequestStatus' }
+        - name: vehicleId
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/TripRequest' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /trip-requests/{tripRequestId}:
+    parameters:
+      - $ref: '#/components/parameters/TripRequestId'
+    get:
+      tags: [trip-requests]
+      operationId: getTripRequest
+      summary: Trip request detail (with stops and quotation, if any)
+      description: 'Roles: CUSTOMER (own), OWNER (own vehicle), ADMIN.'
+      x-required-roles: [CUSTOMER, OWNER, ADMIN]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/TripRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /trip-requests/{tripRequestId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/TripRequestId'
+    post:
+      tags: [trip-requests]
+      operationId: rejectTripRequest
+      summary: Owner declines a request (SUBMITTED → REJECTED)
+      description: 'Roles: OWNER.'
+      x-required-roles: [OWNER]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 1000 }
+      responses:
+        '200':
+          description: Rejected
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/TripRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  /trip-requests/{tripRequestId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/TripRequestId'
+    post:
+      tags: [trip-requests]
+      operationId: cancelTripRequest
+      summary: Customer withdraws a request (SUBMITTED/QUOTED → CANCELLED)
+      description: 'Roles: CUSTOMER.'
+      x-required-roles: [CUSTOMER]
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/TripRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  # ---------------------------------------------------------------------------
+  # Quotations
+  # ---------------------------------------------------------------------------
+  /quotations:
+    post:
+      tags: [quotations]
+      operationId: sendQuotation
+      summary: Owner sends the (single, final) quotation for a request
+      description: |
+        Roles: OWNER. Request must be SUBMITTED. `expiresAt` must be between `quotationExpiryMinHours` and
+        `quotationExpiryMaxHours` from now and not after `startsAt`. `endsAt` is the owner's estimated trip end;
+        `[startsAt, endsAt + buffer)` is what will block the vehicle. Overlapping quotations are allowed.
+        Assumptions go in `notes` (no messaging). Quotations cannot be revised.
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tripRequestId, startsAt, endsAt, baseAmount, expiresAt]
+              properties:
+                tripRequestId: { type: string, format: uuid }
+                startsAt: { type: string, format: date-time }
+                endsAt: { type: string, format: date-time }
+                baseAmount: { $ref: '#/components/schemas/Money' }
+                charges:
+                  type: array
+                  items:
+                    type: object
+                    required: [label, amount]
+                    properties:
+                      label: { type: string }
+                      amount: { $ref: '#/components/schemas/Money' }
+                notes: { type: string, maxLength: 4000 }
+                expiresAt: { type: string, format: date-time }
+      responses:
+        '201':
+          description: Sent; request → QUOTED
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Quotation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /quotations/{quotationId}:
+    parameters:
+      - $ref: '#/components/parameters/QuotationId'
+    get:
+      tags: [quotations]
+      operationId: getQuotation
+      summary: Quotation detail
+      description: 'Roles: CUSTOMER (own request), OWNER (own vehicle), ADMIN.'
+      x-required-roles: [CUSTOMER, OWNER, ADMIN]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Quotation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /quotations/{quotationId}/accept:
+    parameters:
+      - $ref: '#/components/parameters/QuotationId'
+    post:
+      tags: [quotations]
+      operationId: acceptQuotation
+      summary: Accept → payment hold + booking (PENDING_PAYMENT)
+      description: |
+        Roles: CUSTOMER. Atomically creates a vehicle HOLD (valid `holdDurationMinutes`) and a PENDING_PAYMENT
+        booking. The customer must pay before `holdExpiresAt`. Errors: 409 `VEHICLE_UNAVAILABLE` (another
+        customer holds/booked the slot), 409 `QUOTATION_NOT_ACCEPTABLE`, 410 `QUOTATION_EXPIRED`,
+        409 `VEHICLE_NOT_BOOKABLE`. Backed by `availability.createHold`.
+      x-required-roles: [CUSTOMER]
+      responses:
+        '201':
+          description: Held
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [booking, holdExpiresAt]
+                    properties:
+                      booking: { $ref: '#/components/schemas/Booking' }
+                      holdExpiresAt: { type: string, format: date-time }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  /quotations/{quotationId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/QuotationId'
+    post:
+      tags: [quotations]
+      operationId: rejectQuotation
+      summary: Customer rejects the quotation (SENT → REJECTED; request → CANCELLED)
+      description: 'Roles: CUSTOMER.'
+      x-required-roles: [CUSTOMER]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 1000 }
+      responses:
+        '200':
+          description: Rejected
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Quotation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  # ---------------------------------------------------------------------------
+  # Bookings
+  # ---------------------------------------------------------------------------
+  /bookings:
+    get:
+      tags: [bookings]
+      operationId: listBookings
+      summary: Bookings visible to the caller
+      description: |
+        Roles: CUSTOMER (own), OWNER (own vehicles), DRIVER (actively assigned), ADMIN (all). Use `as` when the
+        caller has several roles.
+      x-required-roles: [CUSTOMER, OWNER, DRIVER, ADMIN]
+      parameters:
+        - name: as
+          in: query
+          schema: { type: string, enum: [customer, owner, driver, admin] }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/BookingStatus' }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Booking' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /bookings/{bookingId}:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+    get:
+      tags: [bookings]
+      operationId: getBooking
+      summary: Booking detail
+      description: |
+        Roles: CUSTOMER (own), OWNER (own vehicle), DRIVER (assigned), ADMIN. Contact fields follow rule 14.
+      x-required-roles: [CUSTOMER, OWNER, DRIVER, ADMIN]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Booking' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /bookings/{bookingId}/assign-driver:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+    post:
+      tags: [bookings]
+      operationId: assignDriver
+      summary: Assign or replace the driver of a CONFIRMED booking
+      description: |
+        Roles: OWNER. Driver must be linked to the booking's vehicle and APPROVED. 409 `DRIVER_UNAVAILABLE` if
+        the driver has an overlapping active trip; 422 `DRIVER_NOT_ELIGIBLE`. Backed by
+        `availability.assignDriver`.
+      x-required-roles: [OWNER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [driverId]
+              properties:
+                driverId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Assigned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Booking' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ---------------------------------------------------------------------------
+  # Trips
+  # ---------------------------------------------------------------------------
+  /trips/{bookingId}/status:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+    post:
+      tags: [trips]
+      operationId: updateTripStatus
+      summary: Driver advances the trip status
+      description: |
+        Roles: DRIVER (the actively assigned driver, including owner-drivers). Allowed sequence:
+        ASSIGNED → ACCEPTED → ON_THE_WAY → ARRIVED → STARTED → COMPLETED. COMPLETED also completes the booking.
+      x-required-roles: [DRIVER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [ACCEPTED, ON_THE_WAY, ARRIVED, STARTED, COMPLETED]
+                note: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/TripEvent' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+    get:
+      tags: [trips]
+      operationId: getTripStatusHistory
+      summary: Trip status history
+      description: 'Roles: CUSTOMER (own), OWNER, DRIVER (assigned), ADMIN.'
+      x-required-roles: [CUSTOMER, OWNER, DRIVER, ADMIN]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/TripEvent' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------------------
+  # Admin
+  # ---------------------------------------------------------------------------
+  /admin/verification-queue:
+    get:
+      tags: [admin]
+      operationId: adminVerificationQueue
+      summary: Pending documents, owners, drivers and vehicles (oldest first)
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      parameters:
+        - name: subjectType
+          in: query
+          schema: { $ref: '#/components/schemas/DocumentSubject' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Document' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/documents/{documentId}/approve:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    post:
+      tags: [admin]
+      operationId: adminApproveDocument
+      summary: Approve a document
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: Approved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Document' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  /admin/documents/{documentId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    post:
+      tags: [admin]
+      operationId: adminRejectDocument
+      summary: Reject a document
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      requestBody:
+        $ref: '#/components/requestBodies/ReasonRequired'
+      responses:
+        '200':
+          description: Rejected
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Document' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/owners/{ownerId}/verification:
+    parameters:
+      - name: ownerId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      tags: [admin]
+      operationId: adminSetOwnerVerification
+      summary: Approve, reject or suspend an owner
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      requestBody:
+        $ref: '#/components/requestBodies/VerificationDecision'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/OwnerProfile' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/drivers/{driverId}/verification:
+    parameters:
+      - $ref: '#/components/parameters/DriverId'
+    put:
+      tags: [admin]
+      operationId: adminSetDriverVerification
+      summary: Approve, reject or suspend a driver
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      requestBody:
+        $ref: '#/components/requestBodies/VerificationDecision'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Driver' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/vehicles/{vehicleId}/approval:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    put:
+      tags: [admin]
+      operationId: adminSetVehicleApproval
+      summary: Approve, reject or suspend a vehicle
+      description: |
+        Roles: ADMIN. APPROVED requires at least one linked APPROVED driver (rule 3) and approved vehicle
+        documents; otherwise 409 `INVALID_STATE`.
+      x-required-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [APPROVED, REJECTED, SUSPENDED]
+                reason: { type: string, description: Required for REJECTED and SUSPENDED }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Vehicle' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  /admin/vehicle-categories:
+    get:
+      tags: [admin]
+      operationId: adminListVehicleCategories
+      summary: All categories including inactive
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/VehicleCategory' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [admin]
+      operationId: adminCreateVehicleCategory
+      summary: Create a category
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      requestBody:
+        $ref: '#/components/requestBodies/NamedReferenceInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/VehicleCategory' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/vehicle-categories/{categoryId}:
+    parameters:
+      - name: categoryId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [admin]
+      operationId: adminUpdateVehicleCategory
+      summary: Rename, reorder or (de)activate a category
+      description: 'Roles: ADMIN. Categories are never hard-deleted.'
+      x-required-roles: [ADMIN]
+      requestBody:
+        $ref: '#/components/requestBodies/NamedReferencePatch'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/VehicleCategory' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/areas:
+    get:
+      tags: [admin]
+      operationId: adminListAreas
+      summary: All areas including inactive
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Area' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [admin]
+      operationId: adminCreateArea
+      summary: Create an area
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      requestBody:
+        $ref: '#/components/requestBodies/NamedReferenceInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Area' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/areas/{areaId}:
+    parameters:
+      - name: areaId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [admin]
+      operationId: adminUpdateArea
+      summary: Rename, reorder or (de)activate an area
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      requestBody:
+        $ref: '#/components/requestBodies/NamedReferencePatch'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Area' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/settings:
+    get:
+      tags: [admin]
+      operationId: adminListSettings
+      summary: Platform settings
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/PlatformSetting' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/settings/{key}:
+    parameters:
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+          enum:
+            [commissionPercent, quotationExpiryMinHours, quotationExpiryMaxHours, holdDurationMinutes, tripBufferMinutes]
+    put:
+      tags: [admin]
+      operationId: adminUpdateSetting
+      summary: Change a platform setting (audited)
+      description: |
+        Roles: ADMIN. Validated per key (e.g. quotationExpiryMinHours < quotationExpiryMaxHours). Changing
+        tripBufferMinutes affects only holds/bookings created afterwards.
+      x-required-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: number, minimum: 0 }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/PlatformSetting' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/users:
+    get:
+      tags: [admin]
+      operationId: adminListUsers
+      summary: Search users
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      parameters:
+        - name: q
+          in: query
+          description: Matches email or name
+          schema: { type: string }
+        - name: role
+          in: query
+          schema: { $ref: '#/components/schemas/Role' }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/UserStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/UserSummary' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/users/{userId}/suspend:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [admin]
+      operationId: adminSuspendUser
+      summary: Suspend a user (revokes sessions; audited)
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      requestBody:
+        $ref: '#/components/requestBodies/ReasonRequired'
+      responses:
+        '200':
+          description: Suspended
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/UserSummary' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/users/{userId}/reactivate:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [admin]
+      operationId: adminReactivateUser
+      summary: Reactivate a suspended user
+      description: 'Roles: ADMIN.'
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: Reactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/UserSummary' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    VehicleId:
+      name: vehicleId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DriverId:
+      name: driverId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    TripRequestId:
+      name: tripRequestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    QuotationId:
+      name: quotationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    BookingId:
+      name: bookingId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  requestBodies:
+    ReasonRequired:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [reason]
+            properties:
+              reason: { type: string, minLength: 1, maxLength: 1000 }
+    VerificationDecision:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [status]
+            properties:
+              status:
+                type: string
+                enum: [APPROVED, REJECTED, SUSPENDED]
+              reason: { type: string, description: Required for REJECTED and SUSPENDED }
+    NamedReferenceInput:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [name, slug]
+            properties:
+              name: { type: string }
+              slug: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+              sortOrder: { type: integer }
+              isActive: { type: boolean, default: true }
+    NamedReferencePatch:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            minProperties: 1
+            properties:
+              name: { type: string }
+              sortOrder: { type: integer }
+              isActive: { type: boolean }
+
+  responses:
+    BadRequest:
+      description: Bad request (e.g. invalid or expired token)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthenticated:
+      description: Missing or invalid credentials (`UNAUTHENTICATED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Authenticated but lacking the role or ownership (`FORBIDDEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Conflict:
+      description: |
+        Conflict — `CONFLICT`, `VEHICLE_UNAVAILABLE`, `VEHICLE_NOT_BOOKABLE`, `QUOTATION_NOT_ACCEPTABLE`,
+        `HOLD_EXPIRED`, `DRIVER_UNAVAILABLE` or `INVALID_STATE`
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            error:
+              code: VEHICLE_UNAVAILABLE
+              message: The vehicle is not available for the requested time
+              details: []
+    InvalidState:
+      description: The resource's current status does not allow this action (`INVALID_STATE`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    RateLimited:
+      description: Too many requests (`RATE_LIMITED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Gone:
+      description: Expired (`QUOTATION_EXPIRED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ValidationError:
+      description: Request validation failed (`VALIDATION_ERROR`, `DRIVER_NOT_ELIGIBLE`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Request validation failed
+              details:
+                - path: passengerCount
+                  message: Must be at least 1
+
+  schemas:
+    # --- Envelopes ------------------------------------------------------------
+    PaginationMeta:
+      type: object
+      required: [total, page, pageSize]
+      properties:
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1, maximum: 100 }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: VEHICLE_UNAVAILABLE }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+
+    # --- Scalars & enums ------------------------------------------------------
+    Money:
+      type: string
+      pattern: '^\d{1,10}\.\d{2}$'
+      example: '16500.00'
+    Currency:
+      type: string
+      enum: [LKR]
+    Role:
+      type: string
+      enum: [CUSTOMER, OWNER, DRIVER, ADMIN]
+    UserStatus:
+      type: string
+      enum: [ACTIVE, SUSPENDED, DEACTIVATED]
+    OwnerType:
+      type: string
+      enum: [INDIVIDUAL, BUSINESS]
+    VerificationStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, SUSPENDED]
+    VehicleApprovalStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, SUSPENDED]
+    DocumentSubject:
+      type: string
+      enum: [OWNER, DRIVER, VEHICLE]
+    TripType:
+      type: string
+      enum: [ONE_WAY, RETURN, HOURLY, MULTI_DAY, AIRPORT_TRANSFER]
+    TripRequestStatus:
+      type: string
+      enum: [SUBMITTED, QUOTED, REJECTED, EXPIRED, CANCELLED, CONVERTED]
+    QuotationStatus:
+      type: string
+      enum: [SENT, ACCEPTED, REJECTED, EXPIRED, SUPERSEDED, CANCELLED]
+    BookingStatus:
+      type: string
+      enum: [PENDING_PAYMENT, CONFIRMED, COMPLETED, CANCELLED, EXPIRED]
+    TripStatus:
+      type: string
+      enum: [ASSIGNED, ACCEPTED, ON_THE_WAY, ARRIVED, STARTED, COMPLETED]
+
+    # --- Identity -------------------------------------------------------------
+    AuthSession:
+      type: object
+      required: [accessToken, refreshToken, expiresIn, user]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        expiresIn: { type: integer, description: Access token lifetime in seconds }
+        user: { $ref: '#/components/schemas/Me' }
+    Me:
+      type: object
+      required: [id, email, fullName, roles, status]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        phone: { type: string, nullable: true }
+        fullName: { type: string }
+        status: { $ref: '#/components/schemas/UserStatus' }
+        emailVerified: { type: boolean }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/Role' }
+        ownerProfileId: { type: string, format: uuid, nullable: true }
+        driverProfileId: { type: string, format: uuid, nullable: true }
+    UserSummary:
+      type: object
+      required: [id, email, fullName, roles, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        phone: { type: string, nullable: true }
+        fullName: { type: string }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/Role' }
+        status: { $ref: '#/components/schemas/UserStatus' }
+        createdAt: { type: string, format: date-time }
+    OwnerProfile:
+      type: object
+      required: [id, ownerType, verificationStatus]
+      properties:
+        id: { type: string, format: uuid }
+        ownerType: { $ref: '#/components/schemas/OwnerType' }
+        businessName: { type: string, nullable: true }
+        businessRegNumber: { type: string, nullable: true }
+        verificationStatus: { $ref: '#/components/schemas/VerificationStatus' }
+        ownerDriverId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The owner's own driver profile, if they drive
+    Driver:
+      type: object
+      required: [id, fullName, verificationStatus, isOwnerDriver, isActive]
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        phone: { type: string, nullable: true }
+        licenceNumber: { type: string, description: Visible to the employing owner and admins only }
+        licenceExpiresAt: { type: string, format: date-time, nullable: true }
+        verificationStatus: { $ref: '#/components/schemas/VerificationStatus' }
+        isOwnerDriver: { type: boolean }
+        isActive: { type: boolean }
+        hasLogin: { type: boolean }
+        vehicleIds:
+          type: array
+          description: Normal drivers have at most one; owner-drivers may have several
+          items: { type: string, format: uuid }
+    AssignedDriver:
+      type: object
+      description: |
+        Shown to the customer only after a driver is assigned (rule 14); absent before.
+      x-contact-privacy: visible to customer only when an ACTIVE driver assignment exists
+      required: [id, fullName]
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        phone: { type: string }
+    CustomerContact:
+      type: object
+      description: |
+        Customer as seen by the owner/driver. `email` and `phone` are omitted until the booking is CONFIRMED
+        (paid) — rule 14.
+      required: [fullName]
+      properties:
+        fullName: { type: string }
+        email:
+          type: string
+          format: email
+          x-contact-privacy: owner sees only when booking status is CONFIRMED or COMPLETED
+        phone:
+          type: string
+          x-contact-privacy: owner/assigned driver see only when booking status is CONFIRMED or COMPLETED
+
+    # --- Reference ------------------------------------------------------------
+    VehicleCategory:
+      type: object
+      required: [id, name, slug, isActive, sortOrder]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        isActive: { type: boolean }
+        sortOrder: { type: integer }
+    Area:
+      type: object
+      required: [id, name, slug, isActive]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        isActive: { type: boolean }
+        sortOrder: { type: integer }
+    PlatformSetting:
+      type: object
+      required: [key, value]
+      properties:
+        key: { type: string }
+        value: { type: number }
+        description: { type: string, nullable: true }
+        updatedAt: { type: string, format: date-time }
+
+    # --- Vehicles -------------------------------------------------------------
+    VehicleInput:
+      type: object
+      required: [categoryId, make, model, year, registrationNumber, seats, transmission, fuelType]
+      properties:
+        categoryId: { type: string, format: uuid }
+        make: { type: string }
+        model: { type: string }
+        year: { type: integer, minimum: 1980 }
+        registrationNumber: { type: string, example: WP CAB-1234 }
+        seats: { type: integer, minimum: 1 }
+        luggageCapacity: { type: integer, minimum: 0 }
+        airConditioned: { type: boolean }
+        transmission: { type: string, enum: [MANUAL, AUTOMATIC] }
+        fuelType: { type: string, enum: [PETROL, DIESEL, HYBRID, ELECTRIC, LPG] }
+        features:
+          type: array
+          items: { type: string }
+        description: { type: string, maxLength: 4000 }
+        indicativePrices:
+          type: array
+          items: { $ref: '#/components/schemas/IndicativePrice' }
+    IndicativePrice:
+      type: object
+      required: [pricingUnit, amount]
+      properties:
+        pricingUnit: { type: string, enum: [PER_DAY, PER_KM, PER_HOUR, PER_TRIP] }
+        amount: { $ref: '#/components/schemas/Money' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        notes: { type: string, nullable: true }
+    VehicleImage:
+      type: object
+      required: [id, url, sortOrder, isPrimary]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri, description: Short-lived signed URL (storage key is never exposed) }
+        sortOrder: { type: integer }
+        isPrimary: { type: boolean }
+    VehiclePublic:
+      type: object
+      description: Public listing. No owner or driver contact details.
+      required: [id, category, make, model, year, seats, transmission, fuelType]
+      properties:
+        id: { type: string, format: uuid }
+        category: { $ref: '#/components/schemas/VehicleCategory' }
+        make: { type: string }
+        model: { type: string }
+        year: { type: integer }
+        seats: { type: integer }
+        luggageCapacity: { type: integer }
+        airConditioned: { type: boolean }
+        transmission: { type: string, enum: [MANUAL, AUTOMATIC] }
+        fuelType: { type: string, enum: [PETROL, DIESEL, HYBRID, ELECTRIC, LPG] }
+        features:
+          type: array
+          items: { type: string }
+        description: { type: string, nullable: true }
+        primaryImage:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/VehicleImage'
+          nullable: true
+        indicativePrices:
+          type: array
+          items: { $ref: '#/components/schemas/IndicativePrice' }
+        owner:
+          type: object
+          description: Display name only (business name, or owner's first name for individuals)
+          properties:
+            displayName: { type: string }
+            ownerType: { $ref: '#/components/schemas/OwnerType' }
+        operatingAreas:
+          type: array
+          items: { $ref: '#/components/schemas/Area' }
+    Vehicle:
+      description: Full vehicle as seen by its owner or an admin.
+      allOf:
+        - $ref: '#/components/schemas/VehiclePublic'
+        - type: object
+          required: [registrationNumber, approvalStatus, isActive]
+          properties:
+            registrationNumber: { type: string }
+            approvalStatus: { $ref: '#/components/schemas/VehicleApprovalStatus' }
+            rejectionReason: { type: string, nullable: true }
+            isActive: { type: boolean }
+            isBookable: { type: boolean, description: 'APPROVED, active and at least one approved driver' }
+            driverIds:
+              type: array
+              items: { type: string, format: uuid }
+    Occupancy:
+      type: object
+      required: [id, kind, status, startsAt, endsAt, blockedUntil]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [BLOCK, HOLD, BOOKING] }
+        status: { type: string, enum: [ACTIVE, RELEASED] }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        blockedUntil: { type: string, format: date-time, description: endsAt + trip buffer (HOLD/BOOKING) }
+        expiresAt: { type: string, format: date-time, nullable: true, description: HOLD only }
+        bookingId: { type: string, format: uuid, nullable: true }
+        reason: { type: string, nullable: true }
+    Document:
+      type: object
+      required: [id, subjectType, subjectId, documentType, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        subjectType: { $ref: '#/components/schemas/DocumentSubject' }
+        subjectId: { type: string, format: uuid }
+        documentType: { type: string }
+        status: { type: string, enum: [PENDING, APPROVED, REJECTED] }
+        viewUrl:
+          type: string
+          format: uri
+          description: Short-lived signed URL; returned to admins and the submitting owner/driver only
+        validUntil: { type: string, format: date-time, nullable: true }
+        reviewedAt: { type: string, format: date-time, nullable: true }
+        rejectionReason: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    # --- Booking flow ---------------------------------------------------------
+    Location:
+      type: object
+      required: [address]
+      properties:
+        address: { type: string }
+        lat: { type: number, minimum: -90, maximum: 90, nullable: true }
+        lng: { type: number, minimum: -180, maximum: 180, nullable: true }
+    TripRequestInput:
+      type: object
+      required: [vehicleId, tripType, pickup, requestedStartAt, passengerCount]
+      properties:
+        vehicleId: { type: string, format: uuid }
+        tripType: { $ref: '#/components/schemas/TripType' }
+        pickup: { $ref: '#/components/schemas/Location' }
+        destination:
+          allOf:
+            - $ref: '#/components/schemas/Location'
+          description: Optional for HOURLY trips
+        stops:
+          type: array
+          description: Ordered intermediate stops
+          maxItems: 20
+          items: { $ref: '#/components/schemas/Location' }
+        requestedStartAt: { type: string, format: date-time }
+        requestedReturnAt: { type: string, format: date-time, description: RETURN and MULTI_DAY }
+        requestedHours: { type: integer, minimum: 1, description: HOURLY }
+        passengerCount: { type: integer, minimum: 1 }
+        luggageNotes: { type: string, maxLength: 1000 }
+        specialRequirements: { type: string, maxLength: 2000 }
+        flightNumber: { type: string, description: AIRPORT_TRANSFER only, example: UL 504 }
+        flightArrivalAt: { type: string, format: date-time, description: AIRPORT_TRANSFER only }
+    TripRequest:
+      allOf:
+        - $ref: '#/components/schemas/TripRequestInput'
+        - type: object
+          required: [id, status, customer, createdAt]
+          properties:
+            id: { type: string, format: uuid }
+            status: { $ref: '#/components/schemas/TripRequestStatus' }
+            customer:
+              type: object
+              description: |
+                Owner sees the customer's name only (rule 14). No email or phone on trip requests, ever.
+              required: [fullName]
+              properties:
+                fullName: { type: string }
+            vehicle: { $ref: '#/components/schemas/VehiclePublic' }
+            quotation:
+              type: object
+              allOf:
+                - $ref: '#/components/schemas/Quotation'
+              nullable: true
+            rejectionReason: { type: string, nullable: true }
+            createdAt: { type: string, format: date-time }
+    Quotation:
+      type: object
+      required: [id, tripRequestId, startsAt, endsAt, baseAmount, totalAmount, currency, expiresAt, status]
+      properties:
+        id: { type: string, format: uuid }
+        tripRequestId: { type: string, format: uuid }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time, description: Owner's estimated trip end }
+        baseAmount: { $ref: '#/components/schemas/Money' }
+        charges:
+          type: array
+          items:
+            type: object
+            required: [label, amount]
+            properties:
+              label: { type: string }
+              amount: { $ref: '#/components/schemas/Money' }
+        totalAmount: { $ref: '#/components/schemas/Money' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        notes: { type: string, nullable: true, description: Owner's assumptions }
+        expiresAt: { type: string, format: date-time }
+        status: { $ref: '#/components/schemas/QuotationStatus' }
+        sentAt: { type: string, format: date-time }
+    Booking:
+      type: object
+      required: [id, quotationId, vehicle, startsAt, endsAt, totalAmount, currency, status, customer]
+      properties:
+        id: { type: string, format: uuid }
+        quotationId: { type: string, format: uuid }
+        vehicle: { $ref: '#/components/schemas/VehiclePublic' }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        totalAmount: { $ref: '#/components/schemas/Money' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        status: { $ref: '#/components/schemas/BookingStatus' }
+        tripStatus:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/TripStatus'
+          nullable: true
+          description: Separate lifecycle; null until a driver is assigned
+        holdExpiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Payment deadline while PENDING_PAYMENT
+        confirmedAt: { type: string, format: date-time, nullable: true }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        customer: { $ref: '#/components/schemas/CustomerContact' }
+        driver:
+          allOf:
+            - $ref: '#/components/schemas/AssignedDriver'
+          x-contact-privacy: absent for the customer until a driver is assigned
+        pickup: { $ref: '#/components/schemas/Location' }
+        destination: { $ref: '#/components/schemas/Location' }
+    TripEvent:
+      type: object
+      required: [id, toStatus, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        fromStatus:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/TripStatus'
+          nullable: true
+        toStatus: { $ref: '#/components/schemas/TripStatus' }
+        actorUserId: { type: string, format: uuid, nullable: true }
+        note: { type: string, nullable: true }
+        occurredAt: { type: string, format: date-time }
