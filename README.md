@@ -36,12 +36,16 @@ Start PostgreSQL:
 npm run db:up
 ```
 
-Generate Prisma Client and validate the placeholder schema:
+Apply migrations, seed and validate (details, constraints warning and test setup in
+[backend/README.md](backend/README.md)):
 
 ```bash
-npm run prisma:generate
+npm run db:migrate --workspace backend
+npm run db:seed --workspace backend
 npm run prisma:validate
 ```
+
+Never use `prisma db push` against a shared database — several constraints exist only in migrations.
 
 Stop PostgreSQL:
 
@@ -78,4 +82,6 @@ npm run typecheck
 npm run --workspace backend test
 ```
 
-The frontend uses the `VITE_API_BASE_URL` variable. The backend validates `NODE_ENV`, `PORT`, `DATABASE_URL`, and `FRONTEND_URL` at startup.
+The frontend uses the `VITE_API_BASE_URL` variable. The backend validates `NODE_ENV`, `PORT`, `DATABASE_URL`, `FRONTEND_URL` and `ENABLE_SCHEDULER` at startup.
+
+Design documentation: [docs/database/](docs/database/) and [docs/api/openapi.yaml](docs/api/openapi.yaml).
