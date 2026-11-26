@@ -3,10 +3,13 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { AuthInput } from '../components/auth/AuthInput';
 import { AuthButton } from '../components/auth/AuthButton';
+import { AuthLayout } from '../components/auth/AuthLayout';
 import { LoginPage } from '../pages/auth/LoginPage';
 import { RegisterPage } from '../pages/auth/RegisterPage';
 import { ForgotPasswordPage } from '../pages/auth/ForgotPasswordPage';
 import { ResetPasswordPage } from '../pages/auth/ResetPasswordPage';
+import { AppRoutes } from '../routes/AppRoutes';
+import { AppLayout } from '../layouts/AppLayout';
 import { AuthProvider } from '../contexts/AuthContext';
 import { authApi } from '../services/authApi';
 
@@ -92,6 +95,30 @@ describe('AuthButton Component', () => {
     const button = screen.getByRole('button');
     expect(button).toBeDisabled();
     expect(button.querySelector('svg.animate-spin')).toBeInTheDocument();
+  });
+});
+
+describe('AuthLayout Component', () => {
+  it('renders without an image by default and preserves left column structure', () => {
+    render(
+      <AuthLayout>
+        <div>Form Content</div>
+      </AuthLayout>
+    );
+
+    expect(screen.getByText('Form Content')).toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  });
+
+  it('renders reusable left panel content when provided', () => {
+    render(
+      <AuthLayout leftPanelContent={<div data-testid="custom-media">Scenic Visual</div>}>
+        <div>Form Content</div>
+      </AuthLayout>
+    );
+
+    expect(screen.getByTestId('custom-media')).toBeInTheDocument();
+    expect(screen.getByText('Scenic Visual')).toBeInTheDocument();
   });
 });
 
@@ -267,5 +294,25 @@ describe('ResetPasswordPage Component', () => {
     expect(screen.getByPlaceholderText('New Password (min 10 chars)')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Confirm New Password')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /reset password/i })).toBeInTheDocument();
+  });
+});
+
+describe('Direct Authentication Entry & Routing', () => {
+  it('unauthenticated user opening / is immediately redirected to /login', async () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <AuthProvider>
+          <AppLayout>
+            <AppRoutes />
+          </AppLayout>
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /welcome back/i })).toBeInTheDocument();
+      // Ensure the marketplace header with Sign In/Sign Up is NOT displayed
+      expect(screen.queryByText(/travel marketplace/i)).not.toBeInTheDocument();
+    });
   });
 });

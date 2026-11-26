@@ -14,16 +14,17 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   const isAuthRoute = AUTH_PATHS.includes(location.pathname);
 
-  // Auth routes use their own dedicated full-page Figma AuthLayout without the marketplace header
-  if (isAuthRoute) {
+  // Auth routes and unauthenticated states do not display the marketplace header
+  if (isAuthRoute || !isAuthenticated) {
     return <>{children}</>;
   }
 
+  // Marketplace header is displayed strictly for authenticated users on authenticated pages
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <Link to="/" className="flex items-center gap-2">
+          <Link to="/marketplace" className="flex items-center gap-2">
             <span className="font-bold tracking-tight text-slate-900 text-lg">
               Travel Marketplace
             </span>
@@ -33,7 +34,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           </Link>
 
           <nav className="flex items-center gap-3">
-            {isAuthenticated && user ? (
+            {user && (
               <div className="flex items-center gap-4">
                 <div className="text-right">
                   <p className="text-sm font-semibold text-slate-900">{user.fullName}</p>
@@ -48,21 +49,6 @@ export function AppLayout({ children }: AppLayoutProps) {
                 >
                   Sign Out
                 </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <Link
-                  to="/login"
-                  className="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 hover:text-[#00715D] transition-colors"
-                >
-                  Sign In
-                </Link>
-                <Link
-                  to="/register"
-                  className="rounded-full bg-[#00715D] px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-[#005D4C] transition-colors"
-                >
-                  Sign Up
-                </Link>
               </div>
             )}
           </nav>
