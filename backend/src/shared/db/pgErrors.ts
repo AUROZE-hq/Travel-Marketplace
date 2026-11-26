@@ -49,10 +49,19 @@ export function isExclusionViolation(error: unknown, constraint?: string): boole
   return name === undefined || name === constraint;
 }
 
-/** Deadlocks / serialization failures (and Prisma's P2034) are safe to retry. */
+export function isUniqueViolation(error: unknown): boolean {
+  const e = asErrorLike(error);
+  if (e?.code === 'P2002') return true;
+  if (/Unique constraint failed|duplicate key value violates unique constraint/i.test(String(e?.message ?? ''))) {
+    return true;
+  }
+  return getPgErrorCode(error) === PG_UNIQUE_VIOLATION;
+}
+
+/** Deadlocks / serialization failures (and Prisma's P2034 / P2028) are safe to retry. */
 export function isRetryableTransactionError(error: unknown): boolean {
   const e = asErrorLike(error);
-  if (e?.code === 'P2034') return true;
+  if (e?.code === 'P2034' || e?.code === 'P2028') return true;
   const code = getPgErrorCode(error);
   return code === PG_DEADLOCK_DETECTED || code === PG_SERIALIZATION_FAILURE;
 }
