@@ -22,7 +22,10 @@ export async function runInTransaction<T>(
         timeout: 20_000,
       });
     } catch (error) {
-      if (attempt < MAX_ATTEMPTS && isRetryableTransactionError(error)) continue;
+      if (attempt < MAX_ATTEMPTS && isRetryableTransactionError(error)) {
+        await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 50) + attempt * 25));
+        continue;
+      }
       throw error;
     }
   }

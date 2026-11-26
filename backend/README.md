@@ -89,17 +89,30 @@ npm run lint:openapi        # Redocly lint of docs/api/openapi.yaml
 - **sample** marketplace (`@example.com`): an individual owner-driver with 2 vehicles, a business owner with 2 vehicles
   and 3 drivers, 2 customers — all approved
 
-The seed's password hashing (scrypt via `node:crypto`) is interim; Stage 3 owns the final scheme.
+The seed's password hashing format (scrypt) is supported with transparent upgrade to Argon2id upon login.
+
+## Authentication and Identity (Stage 3A)
+
+Full authentication architecture documentation: [`docs/auth/authentication-architecture.md`](../docs/auth/authentication-architecture.md).
+
+Endpoints implemented under `/api/v1`:
+- `POST /auth/register` — public customer registration with atomic User, UserRole, CustomerProfile, and AuthSession creation
+- `POST /auth/login` — authentication, timing attack protection, Argon2id verification, session creation
+- `POST /auth/refresh` — refresh token rotation with session-family reuse detection
+- `POST /auth/logout` — authenticated session revocation with ownership check
+- `POST /auth/password-reset/request` — email enumeration-safe password reset token generation
+- `POST /auth/password-reset/confirm` — single-use reset confirmation, atomic password update, and multi-device session revocation
+- `GET /users/me` — current authenticated user details and profiles
+- `PATCH /users/me` — user profile update (fullName, phone)
 
 ## Tests
 
 Vitest integration tests run against a real PostgreSQL database (no mocks), because the behaviour under test lives
-in database constraints. `tests/globalSetup.ts` runs `prisma migrate reset --force` against `DATABASE_URL_TEST`
+in database constraints and database transactions. `tests/globalSetup.ts` runs `prisma migrate reset --force` against `DATABASE_URL_TEST`
 (creating the database if needed), and each test truncates all tables. Test files run sequentially; the concurrency
 tests fire parallel transactions within a file.
 
 ## Error handling
 
 Domain errors extend `DomainError` (`src/shared/errors/DomainError.ts`) and carry a stable `code` and `httpStatus`
-for the API error envelope `{ "error": { "code", "message", "details" } }`. The existing Express `errorHandler`
-still returns the old shape and will be updated when routes are added (Stage 3).
+for the API error envelope `{ "error": { "code", "message", "details" } }`. The Express `errorHandler` formats domain errors, Zod validation errors (422), and general errors consistently with this structure.
