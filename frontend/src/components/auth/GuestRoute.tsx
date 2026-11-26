@@ -19,8 +19,9 @@ export function GuestRoute({ children }: GuestRouteProps) {
   }
 
   if (isAuthenticated) {
-    const from = (location.state as { from?: { pathname?: string } })?.from?.pathname || '/';
-    return <Navigate to={from} replace />;
+    const from = (location.state as { from?: { pathname?: string } })?.from?.pathname;
+    const target = from && from !== '/' && from !== '/login' ? from : '/marketplace';
+    return <Navigate to={target} replace />;
   }
 
   return <>{children}</>;

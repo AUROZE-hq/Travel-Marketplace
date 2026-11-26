@@ -66,7 +66,7 @@ export function RegisterPage() {
         phone: phone.trim() || null,
         password,
       });
-      navigate('/', { replace: true });
+      navigate('/marketplace', { replace: true });
     } catch {
       // Error is set in AuthContext
     }
@@ -75,7 +75,7 @@ export function RegisterPage() {
   return (
     <AuthLayout>
       <div className="w-full">
-        <h1 className="font-heading text-4xl sm:text-5xl md:text-[54px] tracking-tight uppercase text-[#111111] mb-6">
+        <h1 className="font-heading text-4xl sm:text-5xl md:text-[54px] tracking-tight uppercase text-[#111111] mb-6 font-normal">
           CREATE ACCOUNT
         </h1>
 

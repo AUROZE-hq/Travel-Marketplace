@@ -15,7 +15,8 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const from = (location.state as { from?: { pathname?: string } })?.from?.pathname || '/';
+  const from = (location.state as { from?: { pathname?: string } })?.from?.pathname;
+  const destination = from && from !== '/' && from !== '/login' ? from : '/marketplace';
 
   const validate = (): boolean => {
     const errors: { email?: string; password?: string } = {};
@@ -44,7 +45,7 @@ export function LoginPage() {
 
     try {
       await login({ email: email.trim(), password });
-      navigate(from, { replace: true });
+      navigate(destination, { replace: true });
     } catch {
       // Error is set in AuthContext
     }
@@ -57,7 +58,7 @@ export function LoginPage() {
   return (
     <AuthLayout>
       <div className="w-full">
-        <h1 className="font-heading text-4xl sm:text-5xl md:text-[54px] tracking-tight uppercase text-[#111111] mb-8">
+        <h1 className="font-heading text-4xl sm:text-5xl md:text-[54px] tracking-tight uppercase text-[#111111] mb-8 font-normal">
           WELCOME BACK
         </h1>
 

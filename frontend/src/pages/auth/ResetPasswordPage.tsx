@@ -78,7 +78,7 @@ export function ResetPasswordPage() {
   return (
     <AuthLayout>
       <div className="w-full">
-        <h1 className="font-heading text-4xl sm:text-5xl md:text-[54px] tracking-tight uppercase text-[#111111] mb-4">
+        <h1 className="font-heading text-4xl sm:text-5xl md:text-[54px] tracking-tight uppercase text-[#111111] mb-4 font-normal">
           SET NEW PASSWORD
         </h1>
 
