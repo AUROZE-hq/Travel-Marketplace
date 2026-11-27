@@ -261,6 +261,58 @@ describe('Authentication API Endpoints', () => {
   });
 
   describe('POST /api/v1/auth/refresh and Session Lifecycle', () => {
+    it('restores and logs out a browser session using an HttpOnly refresh cookie', async () => {
+      const browser = request.agent(app);
+      const registered = await browser
+        .post('/api/v1/auth/register')
+        .set('Origin', env.FRONTEND_URL)
+        .send({
+          email: 'browser.cookie@example.com',
+          password: 'SecurePassword123!',
+          fullName: 'Browser Cookie',
+        });
+
+      expect(registered.status).toBe(201);
+      expect(registered.headers['set-cookie']?.[0]).toMatch(/tm_refresh=.*HttpOnly.*SameSite=Lax/);
+
+      const restored = await browser
+        .post('/api/v1/auth/refresh')
+        .set('Origin', env.FRONTEND_URL)
+        .send({});
+      expect(restored.status).toBe(200);
+      expect(restored.body.data.refreshToken).not.toBe(registered.body.data.refreshToken);
+      expect(restored.headers['set-cookie']?.[0]).toContain('HttpOnly');
+
+      const loggedOut = await browser
+        .post('/api/v1/auth/logout')
+        .set('Origin', env.FRONTEND_URL)
+        .set('Authorization', `Bearer ${restored.body.data.accessToken}`)
+        .send({});
+      expect(loggedOut.status).toBe(204);
+      expect(loggedOut.headers['set-cookie']?.[0]).toContain('tm_refresh=;');
+
+      const afterLogout = await browser
+        .post('/api/v1/auth/refresh')
+        .set('Origin', env.FRONTEND_URL)
+        .send({});
+      expect(afterLogout.status).toBe(422);
+    });
+
+    it('rejects an untrusted browser origin when refreshing by cookie', async () => {
+      const browser = request.agent(app);
+      await browser.post('/api/v1/auth/register').send({
+        email: 'untrusted.origin@example.com',
+        password: 'SecurePassword123!',
+        fullName: 'Untrusted Origin',
+      });
+
+      const response = await browser
+        .post('/api/v1/auth/refresh')
+        .set('Origin', 'https://untrusted.example')
+        .send({});
+      expect(response.status).toBe(403);
+    });
+
     it('successfully rotates refresh token on valid request', async () => {
       const reg = await request(app).post('/api/v1/auth/register').send({
         email: 'rotate@example.com',

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { StrictMode } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { AuthInput } from '../components/auth/AuthInput';
@@ -12,12 +13,13 @@ import { AppRoutes } from '../routes/AppRoutes';
 import { AppLayout } from '../layouts/AppLayout';
 import { AuthProvider } from '../contexts/AuthContext';
 import { authApi } from '../services/authApi';
+import { setAuthTokens } from '../services/apiClient';
 
 vi.mock('../services/authApi', () => ({
   authApi: {
     login: vi.fn(),
     register: vi.fn(),
-    refreshToken: vi.fn(),
+    refreshToken: vi.fn().mockRejectedValue(new Error('No active session')),
     logout: vi.fn(),
     requestPasswordReset: vi.fn(),
     confirmPasswordReset: vi.fn(),
@@ -127,7 +129,7 @@ describe('LoginPage Component', () => {
     vi.clearAllMocks();
   });
 
-  it('renders all Figma login elements correctly', () => {
+  it('renders the email login controls', () => {
     render(
       <MemoryRouter>
         <AuthProvider>
@@ -137,10 +139,10 @@ describe('LoginPage Component', () => {
     );
 
     expect(screen.getByRole('heading', { name: /welcome back/i })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/mobile number,username or email/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Email Address')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Password')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign In' })).toBeInTheDocument();
-    expect(screen.getByText('Forgot Password?')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Forgot Password?' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /create new account/i })).toBeInTheDocument();
   });
@@ -162,17 +164,15 @@ describe('LoginPage Component', () => {
     });
   });
 
-  it('shows Google OAuth notice when Continue with Google is clicked', () => {
+  it('keeps Google sign-in visible and explains that it is planned', () => {
     render(
       <MemoryRouter>
-        <AuthProvider>
-          <LoginPage />
-        </AuthProvider>
+        <AuthProvider><LoginPage /></AuthProvider>
       </MemoryRouter>
     );
 
     fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
-    expect(screen.getByText(/google sign-in is planned for a future release/i)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(/planned for a future release/i);
   });
 });
 
@@ -267,6 +267,27 @@ describe('ForgotPasswordPage Component', () => {
       expect(screen.getByText(/if an account with that email exists/i)).toBeInTheDocument();
     });
   });
+
+  it('shows a retry error when the reset request fails', async () => {
+    vi.mocked(authApi.requestPasswordReset).mockRejectedValueOnce(new Error('Network unavailable'));
+
+    render(
+      <MemoryRouter>
+        <AuthProvider><ForgotPasswordPage /></AuthProvider>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Email Address'), {
+      target: { value: 'user@example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send reset link/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/could not send a reset link/i);
+    });
+    expect(screen.queryByText(/instructions have been sent/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /send reset link/i })).toBeEnabled();
+  });
 });
 
 describe('ResetPasswordPage Component', () => {
@@ -298,6 +319,33 @@ describe('ResetPasswordPage Component', () => {
 });
 
 describe('Direct Authentication Entry & Routing', () => {
+  it('restores an authenticated session before routing after a reload', async () => {
+    vi.mocked(authApi.refreshToken).mockClear();
+    vi.mocked(authApi.refreshToken).mockResolvedValueOnce({
+      accessToken: 'new-access-token',
+      refreshToken: 'new-refresh-token',
+      expiresIn: 900,
+      user: {
+        id: 'user-1', email: 'user@example.com', fullName: 'Test User', phone: null,
+        status: 'ACTIVE', emailVerified: true, roles: ['CUSTOMER'],
+        ownerProfileId: null, driverProfileId: null,
+      },
+    });
+
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/marketplace']}>
+          <AuthProvider><AppRoutes /></AuthProvider>
+        </MemoryRouter>
+      </StrictMode>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /sri lanka travel marketplace/i })).toBeInTheDocument();
+    });
+    expect(authApi.refreshToken).toHaveBeenCalledTimes(1);
+    setAuthTokens(null, null);
+  });
   it('unauthenticated user opening / is immediately redirected to /login', async () => {
     render(
       <MemoryRouter initialEntries={['/']}>

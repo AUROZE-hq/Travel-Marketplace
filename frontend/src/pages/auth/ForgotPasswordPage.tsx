@@ -32,8 +32,7 @@ export function ForgotPasswordPage() {
       await authApi.requestPasswordReset({ email: trimmed.toLowerCase() });
       setIsSubmitted(true);
     } catch {
-      // In accordance with security standards, always show accepted message
-      setIsSubmitted(true);
+      setGeneralError('We could not send a reset link right now. Please try again.');
     } finally {
       setIsLoading(false);
     }

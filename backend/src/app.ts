@@ -22,7 +22,7 @@ if (trustProxy === 'true') {
 }
 
 app.use(helmet());
-app.use(cors({ origin: env.FRONTEND_URL }));
+app.use(cors({ origin: env.FRONTEND_URL, credentials: true }));
 app.use(express.json());
 app.use(requestLogger);
 

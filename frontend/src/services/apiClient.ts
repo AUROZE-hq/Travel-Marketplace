@@ -4,6 +4,7 @@ const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api/
 
 export const apiClient = axios.create({
   baseURL,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -64,28 +65,24 @@ apiClient.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
-    // Do not attempt refresh on auth endpoints themselves
+    // Do not attempt refresh on credential and password-reset endpoints.
     const isAuthEndpoint =
       originalRequest?.url?.includes('/auth/login') ||
       originalRequest?.url?.includes('/auth/register') ||
       originalRequest?.url?.includes('/auth/refresh') ||
-      originalRequest?.url?.includes('/auth/logout') ||
       originalRequest?.url?.includes('/auth/password-reset');
+    const isLogout = originalRequest?.url?.includes('/auth/logout');
 
-    if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
-      if (!inMemoryRefreshToken) {
-        setAuthTokens(null, null);
-        if (onAuthFailureCallback) onAuthFailureCallback();
-        return Promise.reject(error);
-      }
-
+    if (error.response?.status === 401 && originalRequest && !originalRequest._retry && !isAuthEndpoint) {
       if (isRefreshing) {
+        originalRequest._retry = true;
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });
         })
           .then((token) => {
             if (token) {
               originalRequest.headers.Authorization = `Bearer ${token}`;
+              if (isLogout) originalRequest.data = JSON.stringify({ refreshToken: inMemoryRefreshToken });
             }
             return apiClient(originalRequest);
           })
@@ -98,17 +95,21 @@ apiClient.interceptors.response.use(
       try {
         const refreshResponse = await axios.post(
           `${baseURL}/auth/refresh`,
-          { refreshToken: inMemoryRefreshToken },
-          { headers: { 'Content-Type': 'application/json' }, timeout: 10_000 },
+          inMemoryRefreshToken ? { refreshToken: inMemoryRefreshToken } : {},
+          { headers: { 'Content-Type': 'application/json' }, timeout: 10_000, withCredentials: true },
         );
 
         const newAccessToken = refreshResponse.data?.data?.accessToken;
         const newRefreshToken = refreshResponse.data?.data?.refreshToken;
+        if (typeof newAccessToken !== 'string' || typeof newRefreshToken !== 'string') {
+          throw new Error('Invalid refresh response');
+        }
 
         setAuthTokens(newAccessToken, newRefreshToken);
         processQueue(null, newAccessToken);
 
         originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+        if (isLogout) originalRequest.data = JSON.stringify({ refreshToken: newRefreshToken });
         return apiClient(originalRequest);
       } catch (refreshError) {
         processQueue(refreshError, null);

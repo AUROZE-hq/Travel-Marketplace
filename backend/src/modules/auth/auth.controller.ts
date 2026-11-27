@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { authService, type AuthService } from './auth.service.js';
+import { clearRefreshCookie, refreshTokenFromCookie, requireTrustedCookieOrigin, setRefreshCookie } from './refreshCookie.js';
 import {
   loginSchema,
   logoutSchema,
@@ -20,6 +21,7 @@ export class AuthController {
     };
 
     const session = await this.service.register(input, meta);
+    setRefreshCookie(res, session.refreshToken);
     res.status(201).json({ data: session });
   };
 
@@ -31,23 +33,32 @@ export class AuthController {
     };
 
     const session = await this.service.login(input, meta);
+    setRefreshCookie(res, session.refreshToken);
     res.status(200).json({ data: session });
   };
 
   refresh = async (req: Request, res: Response): Promise<void> => {
-    const input = refreshTokenSchema.parse(req.body);
+    const cookieToken = refreshTokenFromCookie(req);
+    const bodyToken = req.body?.refreshToken;
+    if (!bodyToken && cookieToken) requireTrustedCookieOrigin(req);
+    const input = refreshTokenSchema.parse({ refreshToken: bodyToken || cookieToken });
     const meta = {
       ip: req.ip || req.socket.remoteAddress,
       userAgent: req.headers['user-agent'],
     };
 
     const session = await this.service.refresh(input, meta);
+    setRefreshCookie(res, session.refreshToken);
     res.status(200).json({ data: session });
   };
 
   logout = async (req: Request, res: Response): Promise<void> => {
-    const input = logoutSchema.parse(req.body);
+    const cookieToken = refreshTokenFromCookie(req);
+    const bodyToken = req.body?.refreshToken;
+    if (!bodyToken && cookieToken) requireTrustedCookieOrigin(req);
+    const input = logoutSchema.parse({ refreshToken: bodyToken || cookieToken });
     await this.service.logout(req.user!.id, input);
+    clearRefreshCookie(res);
     res.status(204).send();
   };
 
