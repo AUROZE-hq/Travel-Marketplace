@@ -85,3 +85,11 @@ npm run --workspace backend test
 The frontend uses the `VITE_API_BASE_URL` variable. The backend validates `NODE_ENV`, `PORT`, `DATABASE_URL`, `FRONTEND_URL` and `ENABLE_SCHEDULER` at startup.
 
 Design documentation: [docs/database/](docs/database/) and [docs/api/openapi.yaml](docs/api/openapi.yaml).
+
+## CI and delivery
+
+Pull requests and pushes to `development` and `main` run the checks in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml). Successful branch pushes
+publish backend and frontend container images to GitHub Container Registry.
+There is no live deployment destination yet. See [deploy/README.md](deploy/README.md)
+for the image tags, deployment template, and required GitHub branch settings.
