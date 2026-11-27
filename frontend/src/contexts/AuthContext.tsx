@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -23,6 +24,8 @@ import { AuthContext } from './AuthContextValue';
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Me | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(true);
+  const restoreStarted = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const clearError = useCallback(() => setError(null), []);
@@ -85,27 +88,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     const refreshToken = getRefreshToken();
     try {
-      if (refreshToken) {
-        await authApi.logout({ refreshToken });
-      }
-    } catch {
-      // Best-effort logout; clear local state regardless
-    } finally {
+      await authApi.logout(refreshToken ? { refreshToken } : undefined);
       setAuthTokens(null, null);
       setUser(null);
       setError(null);
+    } catch {
+      setError('We could not sign you out right now. Please try again.');
+    } finally {
       setIsLoading(false);
     }
   };
 
   const refresh = async () => {
     const refreshToken = getRefreshToken();
-    if (!refreshToken) {
-      setUser(null);
-      return;
-    }
     try {
-      const session = await authApi.refreshToken({ refreshToken });
+      const session = await authApi.refreshToken(refreshToken ? { refreshToken } : undefined);
       setAuthTokens(session.accessToken, session.refreshToken);
       setUser(session.user);
     } catch {
@@ -118,6 +115,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOnAuthFailure(() => {
       setUser(null);
     });
+  }, []);
+
+  useEffect(() => {
+    if (restoreStarted.current) return;
+    restoreStarted.current = true;
+
+    void authApi.refreshToken()
+      .then((session) => {
+        setAuthTokens(session.accessToken, session.refreshToken);
+        setUser(session.user);
+      })
+      .catch(() => {
+        setAuthTokens(null, null);
+        setUser(null);
+      })
+      .finally(() => setIsRestoring(false));
   }, []);
 
   const hasRole = useCallback(
@@ -141,6 +154,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         isAuthenticated: !!user,
         isLoading,
+        isRestoring,
         error,
         login,
         register,

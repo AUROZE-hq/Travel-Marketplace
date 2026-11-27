@@ -10,7 +10,7 @@ const AUTH_PATHS = ['/login', '/register', '/forgot-password', '/reset-password'
 
 export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation();
-  const { user, isAuthenticated, logout } = useAuth();
+  const { user, isAuthenticated, logout, error } = useAuth();
 
   const isAuthRoute = AUTH_PATHS.includes(location.pathname);
 
@@ -54,6 +54,12 @@ export function AppLayout({ children }: AppLayoutProps) {
           </nav>
         </div>
       </header>
+
+      {error && (
+        <div role="alert" className="mx-auto max-w-6xl px-6 py-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
 
       <main>{children}</main>
     </div>

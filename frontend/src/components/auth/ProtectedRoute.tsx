@@ -9,10 +9,10 @@ interface ProtectedRouteProps {
 }
 
 export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
-  const { isAuthenticated, isLoading, user } = useAuth();
+  const { isAuthenticated, isLoading, isRestoring, user } = useAuth();
   const location = useLocation();
 
-  if (isLoading) {
+  if (isLoading || isRestoring) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#FFFCE9]">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-[#00715D] border-t-transparent" />

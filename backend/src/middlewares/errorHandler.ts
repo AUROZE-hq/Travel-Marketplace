@@ -19,7 +19,7 @@ export const errorHandler: ErrorRequestHandler = (error, _request, response, nex
 
   // 2. Zod validation errors
   if (error instanceof ZodError) {
-    const details = error.errors.map((e) => ({
+    const details = error.issues.map((e) => ({
       path: e.path.join('.'),
       message: e.message,
     }));

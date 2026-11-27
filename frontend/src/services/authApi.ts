@@ -23,13 +23,13 @@ export const authApi = {
     return response.data.data;
   },
 
-  async refreshToken(payload: RefreshTokenRequest): Promise<AuthSession> {
-    const response = await apiClient.post<ApiResponse<AuthSession>>('/auth/refresh', payload);
+  async refreshToken(payload?: RefreshTokenRequest): Promise<AuthSession> {
+    const response = await apiClient.post<ApiResponse<AuthSession>>('/auth/refresh', payload ?? {});
     return response.data.data;
   },
 
-  async logout(payload: LogoutRequest): Promise<void> {
-    await apiClient.post('/auth/logout', payload);
+  async logout(payload?: LogoutRequest): Promise<void> {
+    await apiClient.post('/auth/logout', payload ?? {});
   },
 
   async requestPasswordReset(payload: PasswordResetRequest): Promise<void> {

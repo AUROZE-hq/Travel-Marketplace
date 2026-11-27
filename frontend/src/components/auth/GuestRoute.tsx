@@ -7,10 +7,10 @@ interface GuestRouteProps {
 }
 
 export function GuestRoute({ children }: GuestRouteProps) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, isRestoring } = useAuth();
   const location = useLocation();
 
-  if (isLoading) {
+  if (isLoading || isRestoring) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#FFFCE9]">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-[#00715D] border-t-transparent" />

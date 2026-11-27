@@ -39,7 +39,7 @@ const envSchema = z
     SMTP_USER: z.string().optional(),
     SMTP_PASS: z.string().optional(),
     SMTP_FROM: z.string().default('no-reply@travelmarketplace.lk'),
-    SMTP_SECURE: booleanFlag.default('false'),
+    SMTP_SECURE: booleanFlag,
   })
   .superRefine((data, ctx) => {
     if (data.NODE_ENV === 'production') {

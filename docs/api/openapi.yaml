@@ -72,7 +72,9 @@ paths:
       tags: [auth]
       operationId: register
       summary: Register a customer account
-      description: Creates a user with the CUSTOMER role. Owner/driver onboarding happens afterwards. Public.
+      description: >-
+        Creates a user with the CUSTOMER role. Owner/driver onboarding happens afterwards.
+        Public. Also sets an HttpOnly SameSite=Lax refresh cookie for browser sessions.
       security: []
       x-required-roles: []
       requestBody:
@@ -105,7 +107,7 @@ paths:
       tags: [auth]
       operationId: login
       summary: Log in with email and password
-      description: Public.
+      description: Public. Also sets an HttpOnly SameSite=Lax refresh cookie for browser sessions.
       security: []
       x-required-roles: []
       requestBody:
@@ -136,16 +138,17 @@ paths:
       tags: [auth]
       operationId: refreshToken
       summary: Exchange a refresh token for a new session
-      description: Public (the refresh token is the credential). Refresh tokens rotate on use.
+      description: >-
+        Public (the refresh token is the credential). Send refreshToken in JSON or use
+        the HttpOnly refresh cookie with credentials included. Tokens and cookies rotate on use.
       security: []
       x-required-roles: []
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
-              required: [refreshToken]
               properties:
                 refreshToken: { type: string }
       responses:
@@ -165,15 +168,16 @@ paths:
       tags: [auth]
       operationId: logout
       summary: Revoke the current refresh token
-      description: 'Roles: any authenticated user.'
+      description: >-
+        Roles: any authenticated user. Send refreshToken in JSON or use the HttpOnly
+        refresh cookie with credentials included. A successful logout clears the cookie.
       x-required-roles: [ANY]
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
-              required: [refreshToken]
               properties:
                 refreshToken: { type: string }
       responses:
